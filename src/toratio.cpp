@@ -1,19 +1,26 @@
+#include "toratio.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <pthread.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <string>
 #include <sstream>
 #include <algorithm>
+#ifndef _WIN32
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <pthread.h>
+#else
+#include <winsock2.h>
+#endif
+
 #include "network.h"
+
 using namespace std;
 
 #define DEBUG					1
-#define USE_CLIENT_THREADS 		0
+#define USE_CLIENT_THREADS 		0 // linux only
 
 static const double s_uploadMultiplier = 1.1;
 static bool stop = false;
@@ -91,6 +98,17 @@ public:
 };
 
 /**
+ *	Closes socket
+ */
+void CloseSocket(HSOCKET s)
+{
+#ifdef _WIN32
+	closesocket(s);
+#else
+	close(s);
+#endif
+}
+/**
  * Returns true if char is not alphanumeric
  */
 inline bool IsNotAlphaNumChar(const char c)
@@ -111,7 +129,11 @@ void DebugPrint(const char *format, ...)
     va_start(args, format);
     char buff[1024]; // get rid of this hard-coded buffer
     char tmp[1024];
+#ifndef _WIN32
     pthread_t id = pthread_self();
+#else
+	ULONG id = 0;
+#endif
     snprintf(tmp, 1023, "[%lu] %s\n", id, format);
     vsnprintf(buff, 1023, tmp, args);
     va_end(args);
@@ -123,6 +145,7 @@ void DebugPrint(const char *format, ...)
     printf("%s", out.c_str());
 }
 
+#ifndef _WIN32
 /**
  * ctrl+c signal handler
  */
@@ -131,6 +154,23 @@ void SignalHandler(int s)
 	printf("\nReceived signal 0x%x \n",s);
 	stop = true;
 }
+
+#else
+/**
+* ctrl+c signal handler
+*/
+BOOL WINAPI SignalHandler(DWORD s) {
+
+	if (s == CTRL_C_EVENT)
+	{
+		printf("\nReceived signal 0x%x \n", s);
+		stop = true;		
+		WSACleanup();
+	}
+
+	return TRUE;
+}
+#endif
 
 /**
  * Prints memory in hex format
@@ -209,7 +249,7 @@ void * ProcessClientConn(void *arg)
 	DebugPrint("New client connection");
 
 	char requestMsg[1024 * 2];
-	int clientSockfd = *((int *)arg);
+	HSOCKET clientSockfd = *((int *)arg);
 
 	if (clientSockfd < 0)
 	{
@@ -224,14 +264,14 @@ void * ProcessClientConn(void *arg)
 	if ( ReadFromSocket(clientSockfd, requestMsg, sizeof(requestMsg) - 1, n) != 0)
 	{
 		DebugPrint("ERROR reading from client socket");
-		close(clientSockfd);
+		CloseSocket(clientSockfd);
 		return NULL;
 	}
 
 	if (strncmp(requestMsg, "\r\n\r\n", 4) == 0 )
 	{
 		DebugPrint("Close msg received from client");
-		close(clientSockfd);
+		CloseSocket(clientSockfd);
 		return NULL;
 	}
 
@@ -240,7 +280,7 @@ void * ProcessClientConn(void *arg)
 		DebugPrint("%s\n",requestMsg);
 		DebugPrint("This is not GET request, closing..");
 		WriteSocket(clientSockfd, "0\r\n\r\n", 5);
-		close(clientSockfd);
+		CloseSocket(clientSockfd);
 		return NULL;
 	}
 
@@ -276,7 +316,7 @@ void * ProcessClientConn(void *arg)
 	{
 		DebugPrint("Host string not found, closing..");
 		WriteSocket(clientSockfd, "0\r\n\r\n", 5);
-		if ( clientSockfd > 0 ) { close(clientSockfd); }
+		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
 
@@ -287,7 +327,7 @@ void * ProcessClientConn(void *arg)
 	{
 		DebugPrint("Unable to resolve hostname (%s)", host);
 		WriteSocket(clientSockfd, "0\r\n\r\n", 5);
-		if ( clientSockfd > 0 ) { close(clientSockfd); }
+		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
 	DebugPrint("Resolved server ip: %s", serverIp);
@@ -364,11 +404,11 @@ void * ProcessClientConn(void *arg)
 	DebugPrint("Request host: (%s)", host);
 
 	// query dest server
-	int servSock = ConnectSocket(serverIp, serverPort);
+	HSOCKET servSock = ConnectSocket(serverIp, serverPort);
 	if (servSock < 0)
 	{
 		DebugPrint("ERROR invalid server socket descriptor");
-		if ( clientSockfd > 0 ) { close(clientSockfd); }
+		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
 
@@ -381,7 +421,7 @@ void * ProcessClientConn(void *arg)
 	{
 		DebugPrint("ERROR in ProcessDestServer (%d)", proc);
 		free(buffResp);
-		if ( clientSockfd > 0 ) { close(clientSockfd); }
+		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
 
@@ -390,8 +430,8 @@ void * ProcessClientConn(void *arg)
 		DebugPrint("ERROR writing to client socket");
 
 	DebugPrint("Closing client socket connection");
-	if ( clientSockfd > 0 ) { close(clientSockfd); }
-	if ( servSock > 0 ) { close(servSock); }
+	if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+	if ( servSock > 0 ) { CloseSocket(servSock); }
 
 	free(buffResp);
 
@@ -400,6 +440,7 @@ void * ProcessClientConn(void *arg)
 
 int main(int argc, char *argv[])
 {
+#ifndef _WIN32
 	// set up signal hadler for ctrl+c
 	struct sigaction sigIntHandler;
 
@@ -408,10 +449,22 @@ int main(int argc, char *argv[])
 	sigIntHandler.sa_flags = 0;
 
 	sigaction(SIGINT, &sigIntHandler, NULL);
+#else
+	if (!SetConsoleCtrlHandler(SignalHandler, TRUE)) {
+		DebugPrint("ERROR: Could not set control handler");
+		return 4;
+	}
 
+	WSADATA wsaData;
+	int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (iResult != NO_ERROR) {
+		DebugPrint("WSAStartup() failed with error: %d\n", iResult);
+		return 3;
+	}
+#endif
 
-	int listenSockFd, clientSockFd, portno;
-	socklen_t clilen;
+	HSOCKET listenSockFd, clientSockFd;
+	int clilen, portno;
 	struct sockaddr_in serv_addr, cli_addr;
 	if (argc < 2)
 	{
@@ -424,6 +477,9 @@ int main(int argc, char *argv[])
 	if (listenSockFd < 0)
 	{
 		DebugPrint("ERROR opening listen socket");
+#ifdef _WIN32
+		WSACleanup();
+#endif
 		return 1;
 	}
 	memset((char *) &serv_addr, 0, sizeof(serv_addr));
@@ -434,6 +490,9 @@ int main(int argc, char *argv[])
 	if (bind(listenSockFd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 	{
 		DebugPrint("ERROR on binding");
+#ifdef _WIN32
+		WSACleanup();
+#endif
 		return 2;
 	}
 	listen(listenSockFd, 5);
@@ -447,8 +506,12 @@ int main(int argc, char *argv[])
 
 		if ( USE_CLIENT_THREADS )
 		{
+#ifndef _WIN32
 			pthread_t t;
 			pthread_create(&t, NULL, &ProcessClientConn, &clientSockFd);
+#else
+			ProcessClientConn(&clientSockFd);
+#endif
 		}
 		else
 		{
@@ -457,7 +520,8 @@ int main(int argc, char *argv[])
 	}
 
 	DebugPrint("Closing listening socket..");
-	close(listenSockFd);
+	CloseSocket(listenSockFd);
+	WSACleanup();
 	DebugPrint("%s has shut down", argv[0]);
 	return 0;
 }

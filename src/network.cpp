@@ -1,10 +1,4 @@
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <stdlib.h>
-
+#include "toratio.h"
 #include "network.h"
 
 /**
@@ -52,7 +46,7 @@ void ParseChunkedMessage(char *msg)
  * Read from socket
  * returns true on success
  */
-int ReadFromSocket(int sock, char *buffer, int nBuffer, int &nRead)
+int ReadFromSocket(HSOCKET sock, char *buffer, int nBuffer, int &nRead)
 {
 	int tmp;
 	nRead = 0;
@@ -64,7 +58,11 @@ int ReadFromSocket(int sock, char *buffer, int nBuffer, int &nRead)
 	memset(buffer, 0, nBuffer);
 	do
 	{
+#ifndef _WIN32
 		tmp = read(sock, &buffer[nRead], nBuffer - nRead);
+#else
+		tmp = recv(sock, &buffer[nRead], nBuffer - nRead, 0);
+#endif
 		if (tmp > 0)
 			nRead += tmp;
 
@@ -90,12 +88,16 @@ int ReadFromSocket(int sock, char *buffer, int nBuffer, int &nRead)
  * Write to socket
  * returns 0 on success
  */
-int WriteSocket(int sock, const char *buffer, int nData)
+int WriteSocket(HSOCKET sock, const char *buffer, int nData)
 {
 	int tmp, n = 0;
 	do
 	{
+#ifndef _WIN32
 		tmp = write(sock, &buffer[n], nData - n);
+#else
+		tmp = send(sock, &buffer[n], nData - n, 0);
+#endif
 		if (tmp > 0)
 			n += tmp;
 	} while(tmp > 0 && n < nData);
@@ -139,9 +141,9 @@ int ResolveHostname(const char * hostname , char* ip, int nIp)
 /**
  * Connect socket
  */
-int ConnectSocket(const char *destIP, int port)
+HSOCKET ConnectSocket(const char *destIP, int port)
 {
-	int sockfd = 0;
+	HSOCKET sockfd = 0;
 	if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 	{
 		printf("\n ERROR : Could not create socket \n");
