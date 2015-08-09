@@ -290,7 +290,7 @@ void * ProcessClientConn(void *arg)
 		if ( clientSockfd > 0 ) { close(clientSockfd); }
 		return NULL;
 	}
-	DebugPrint("Server IP: %s", serverIp);
+	DebugPrint("Resolved server ip: %s", serverIp);
 
 	GetRequest newRequest(requestMsg);
 
@@ -322,7 +322,7 @@ void * ProcessClientConn(void *arg)
 				newRequest.GetString() = newRequest.GetString().replace(nHttp, tmp.length(), string(""));
 			}
 
-			DebugPrint("Replaced host string:\n%s", newRequest.GetString().c_str());
+//			DebugPrint("Replaced host string:\n%s", newRequest.GetString().c_str());
 		}
 	}
 
