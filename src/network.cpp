@@ -44,7 +44,7 @@ void ParseChunkedMessage(char *msg)
 
 /**
  * Read from socket
- * returns true on success
+ * returns 0 on success
  */
 int ReadFromSocket(HSOCKET sock, char *buffer, int nBuffer, int &nRead)
 {
@@ -71,7 +71,7 @@ int ReadFromSocket(HSOCKET sock, char *buffer, int nBuffer, int &nRead)
 
 		if ( chunked && strstr(buffer, "0\r\n\r\n") != NULL )
 			break;
-		else if ( strstr(buffer, "\r\n\r\n") != NULL ) // eof msg received
+		else if ( strstr(buffer, "\r\n\r\n") != NULL ||  strstr(buffer, "\n\n") != NULL ) // eof msg received
 			break;
 	} while(tmp > 0);
 

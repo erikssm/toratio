@@ -245,6 +245,9 @@ int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int b
 void * ProcessClientConn(void *arg)
 {
 	int n;
+	static const char * forbiddenMsg = "HTTP/1.0 403 Forbidden\r\nStatus Code: 403"
+			"\r\nContent-Length: 0"
+			"\r\nConnection: close\r\n\r\n";
 
 	DebugPrint("New client connection");
 
@@ -275,11 +278,13 @@ void * ProcessClientConn(void *arg)
 		return NULL;
 	}
 
-	if (strncmp(requestMsg, "GET", 3) != 0 )
+	bool getRequest = strncmp(requestMsg, "GET", 3) == 0;
+	bool connectRequest = strncmp(requestMsg, "CONNECT", 7) == 0;
+	if ( !getRequest && !connectRequest)
 	{
 		DebugPrint("%s\n",requestMsg);
 		DebugPrint("This is not GET request, closing..");
-		WriteSocket(clientSockfd, "0\r\n\r\n", 5);
+		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
 		CloseSocket(clientSockfd);
 		return NULL;
 	}
@@ -291,16 +296,32 @@ void * ProcessClientConn(void *arg)
 	int serverPort = 80;
 	char host[1024];
 	memset(host, 0, 1024);
-	char *pHttp = strstr(requestMsg, "http:");
-	if ( pHttp != NULL)
+	char *pHost = strchr(requestMsg, ' ');
+	if ( pHost != NULL)
 	{
-		char *pStart = strchr(pHttp, '/');
-		pStart += 2;
+		pHost++; // skip blank
+		char *pStart;
+		if (getRequest)
+			pStart = strchr(pHost, '/');
+		else
+			pStart = pHost;
 		char *pEnd = NULL;
 		if ( pStart != NULL )
-			pEnd = strchr(pStart, '/');
+		{
+			if (getRequest)
+			{
+				pStart += 2; // skip '//'
+				pEnd = strchr(pStart, '/');
+			}
+			else if (connectRequest)
+			{
+				pEnd = strchr(pStart, ' ');
+			}
+		}
 		if (pStart != NULL && pEnd != NULL )
+		{
 			strncpy(host, pStart, pEnd - pStart);
+		}
 
 		// check if port is present
 		char *pColon = strchr(host, ':');
@@ -315,7 +336,7 @@ void * ProcessClientConn(void *arg)
 	if ( host[0] == 0 )
 	{
 		DebugPrint("Host string not found, closing..");
-		WriteSocket(clientSockfd, "0\r\n\r\n", 5);
+		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
@@ -326,114 +347,173 @@ void * ProcessClientConn(void *arg)
 	if ( ResolveHostname(host, serverIp, 1024) != 0 )
 	{
 		DebugPrint("Unable to resolve hostname (%s)", host);
-		WriteSocket(clientSockfd, "0\r\n\r\n", 5);
+		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
 	DebugPrint("Resolved server ip: %s", serverIp);
 
-	GetRequest newRequest(requestMsg);
-
-	// replace host name
-	size_t nHost = newRequest.GetString().find("Host: ");
-	if (nHost != string::npos)
+	if (getRequest)
 	{
-		size_t nNewline = newRequest.GetString().find("\r\n", nHost);
-		if (nNewline != string::npos)
+		GetRequest newRequest(requestMsg);
+
+		// replace host name
+		size_t nHost = newRequest.GetString().find("Host: ");
+		if (nHost != string::npos)
 		{
-			stringstream convert;
-			convert << serverPort;
-
-			string newHostStr("Host: ");
-			newHostStr += string(host);
-			if (hasPort)
-				newHostStr += string(":") + convert.str();
-
-			newRequest.GetString() = newRequest.GetString().replace(nHost, (nNewline - nHost), newHostStr);
-
-			// replace GET string
-			size_t nHttp = newRequest.GetString().find("GET http");
-			if (nHttp != string::npos)
+			size_t nNewline = newRequest.GetString().find("\r\n", nHost);
+			if (nNewline != string::npos)
 			{
-				nHttp += 4;
-				string tmp = "http://" + string(host);
+				stringstream convert;
+				convert << serverPort;
+
+				string newHostStr("Host: ");
+				newHostStr += string(host);
 				if (hasPort)
-					tmp += string(":") + convert.str();
-				newRequest.GetString() = newRequest.GetString().replace(nHttp, tmp.length(), string(""));
+					newHostStr += string(":") + convert.str();
+
+				newRequest.GetString() = newRequest.GetString().replace(nHost, (nNewline - nHost), newHostStr);
+
+				// replace GET string
+				size_t nHttp = newRequest.GetString().find("GET http");
+				if (nHttp != string::npos)
+				{
+					nHttp += 4;
+					string tmp = "http://" + string(host);
+					if (hasPort)
+						tmp += string(":") + convert.str();
+					newRequest.GetString() = newRequest.GetString().replace(nHttp, tmp.length(), string(""));
+				}
 			}
-
-//			DebugPrint("Replaced host string:\n%s", newRequest.GetString().c_str());
 		}
-	}
 
-	// modify uploaded parameter
-	bool error;
-	long long nUpBytes = newRequest.GetParameterValueLLong("uploaded", error);
-	if (!error)
-	{
-		long long nDownBytes = newRequest.GetParameterValueLLong("downloaded", error);
-		long long newBytes = 0;
+		// modify uploaded parameter
+		bool error;
+		long long nUpBytes = newRequest.GetParameterValueLLong("uploaded", error);
 		if (!error)
 		{
-			if (nUpBytes < nDownBytes)
-				newBytes = (long long)(nDownBytes * s_uploadMultiplier);
+			long long nDownBytes = newRequest.GetParameterValueLLong("downloaded", error);
+			long long newBytes = 0;
+			if (!error)
+			{
+				if (nUpBytes < nDownBytes)
+					newBytes = (long long)(nDownBytes * s_uploadMultiplier);
+				else
+					newBytes = (long long)(nUpBytes * s_uploadMultiplier);
+			}
 			else
+			{
+				DebugPrint("Error retrieving \"downloaded\" param from GET string (\"%s\") ", requestMsg);
 				newBytes = (long long)(nUpBytes * s_uploadMultiplier);
+			}
+
+			if ( newBytes >= 0 )
+			{
+				stringstream convert;
+				convert << newBytes;
+				DebugPrint("Setting \"uploaded\" to \"%s\"", convert.str().c_str());
+				newRequest.SetParameterValue("uploaded", convert.str());
+			}
+			else
+				DebugPrint("Error: uploaded bytes < 0 (original request: \"%s\")", requestMsg);
 		}
 		else
 		{
-			DebugPrint("Error retrieving \"downloaded\" param from GET string (\"%s\") ", requestMsg);
-			newBytes = (long long)(nUpBytes * s_uploadMultiplier);
+			DebugPrint("Error retrieving \"uploaded\" param from GET string (\"%s\") ", requestMsg);
 		}
 
-		if ( newBytes >= 0 )
+		DebugPrint("Request host: (%s)", host);
+
+		// query dest server
+		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
+		if (servSock < 0)
 		{
-			stringstream convert;
-			convert << newBytes;
-			DebugPrint("Setting \"uploaded\" to \"%s\"", convert.str().c_str());
-			newRequest.SetParameterValue("uploaded", convert.str());
+			DebugPrint("ERROR invalid server socket descriptor");
+			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+			return NULL;
 		}
-		else
-			DebugPrint("Error: uploaded bytes < 0 (original request: \"%s\")", requestMsg);
-	}
-	else
-	{
-		DebugPrint("Error retrieving \"uploaded\" param from GET string (\"%s\") ", requestMsg);
-	}
 
-	DebugPrint("Request host: (%s)", host);
+		int bytesRead = 0;
+		int buffSize = 1024 * 1024 * 5;
+		char *buffResp = (char *)malloc(buffSize * sizeof(char));
+		DebugPrint("Processing request: %s", newRequest.c_str());
+		int proc = ProcessDestServer(servSock, newRequest.c_str(), buffResp, buffSize, bytesRead);
+		if ( proc != 0 )
+		{
+			DebugPrint("ERROR in ProcessDestServer (%d)", proc);
+			free(buffResp);
+			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+			return NULL;
+		}
 
-	// query dest server
-	HSOCKET servSock = ConnectSocket(serverIp, serverPort);
-	if (servSock < 0)
-	{
-		DebugPrint("ERROR invalid server socket descriptor");
-		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-		return NULL;
-	}
+		DebugPrint("Sending response to client (%d bytes)", bytesRead);
+		if ( WriteSocket(clientSockfd, buffResp, bytesRead) != 0)
+			DebugPrint("ERROR writing to client socket");
 
-	int bytesRead = 0;
-	int buffSize = 1024 * 1024 * 5;
-	char *buffResp = (char *)malloc(buffSize * sizeof(char));
-	DebugPrint("Processing request: %s", newRequest.c_str());
-	int proc = ProcessDestServer(servSock, newRequest.c_str(), buffResp, buffSize, bytesRead);
-	if ( proc != 0 )
-	{
-		DebugPrint("ERROR in ProcessDestServer (%d)", proc);
+		// cleanup
+		if ( servSock > 0 ) { CloseSocket(servSock); }
 		free(buffResp);
-		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-		return NULL;
+	}
+	else if (connectRequest)
+	{
+		char buff[1024];
+
+		DebugPrint("Processing CONNECT request..");
+
+		// query dest server
+		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
+		if (servSock < 0)
+		{
+			DebugPrint("ERROR invalid server socket descriptor (CONNECT)");
+			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+			return NULL;
+		}
+		DebugPrint("Connected to destination server (CONNECT)");
+
+		static const char * http200 = "HTTP/1.0 200 Connection established\r\n\r\n";
+		if ( WriteSocket(clientSockfd, http200, strlen(http200)) != 0 )
+		{
+			DebugPrint("ERROR writing to client socket (CONNECT)");
+			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+			if ( servSock > 0 ) { CloseSocket(servSock); }
+			return NULL;
+		}
+		DebugPrint("Connected to destination server (CONNECT)");
+
+		// read from client
+		while ( ReadFromSocket(clientSockfd, buff, sizeof(buff), n) == 0 && n > 0)
+		{
+			DebugPrint("(CONNECT) read from client %d bytes: %s", n, buff);
+			// send to server
+			if ( WriteSocket(servSock, buff, n) != 0 )
+			{
+				DebugPrint("ERROR writing to server socket (CONNECT, msg:\"%s\")", buff);
+				break;
+			}
+			DebugPrint("(CONNECT) sent to server %d bytes: %s", n, buff);
+
+			// read server response
+			if ( ReadFromSocket(servSock, buff, sizeof(buff), n) != 0 && n > 0)
+			{
+				DebugPrint("ERROR reading server response (CONNECT)");
+				break;
+			}
+			DebugPrint("(CONNECT) read from server %d bytes: %s", n, buff);
+
+			// send back to client
+			if ( WriteSocket(clientSockfd, buff, n) != 0 )
+			{
+				DebugPrint("ERROR writing to client socket (CONNECT, msg:\"%s\")", buff);
+				break;
+			}
+			DebugPrint("(CONNECT) sent back to client %d bytes: %s", n, buff);
+		}
+
+		if ( servSock > 0 ) { CloseSocket(servSock); }
 	}
 
-	DebugPrint("Sending response to client (%d bytes)", bytesRead);
-	if ( WriteSocket(clientSockfd, buffResp, bytesRead) != 0)
-		DebugPrint("ERROR writing to client socket");
-
-	DebugPrint("Closing client socket connection");
+	DebugPrint("Client request process finished succesfully, closing socket");
 	if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-	if ( servSock > 0 ) { CloseSocket(servSock); }
-
-	free(buffResp);
 
 	return NULL;
 }
@@ -530,4 +610,3 @@ int main(int argc, char *argv[])
 }
 
 // todo rewrite code to c++ 11
-// todo implement CONNECT method
