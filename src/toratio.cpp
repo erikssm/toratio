@@ -2,17 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <string.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <stdarg.h>
-#include <netdb.h>
 #include <signal.h>
 #include <string>
 #include <sstream>
+#include <algorithm>
 #include "network.h"
 using namespace std;
 
@@ -95,6 +91,15 @@ public:
 };
 
 /**
+ * Returns true if char is not alphanumeric
+ */
+inline bool IsNotAlphaNumChar(const char c)
+{
+	if (c != '\r' && c != '\n' && (c < 32 || c > 125) )
+		return true;
+	return false;
+}
+/**
  * Print debug message
  */
 void DebugPrint(const char *format, ...)
@@ -111,7 +116,11 @@ void DebugPrint(const char *format, ...)
     vsnprintf(buff, 1023, tmp, args);
     va_end(args);
 
-    printf("%s", buff);
+    // replace non alpha characters
+    string out(buff);
+    replace_if(out.begin(), out.end(), IsNotAlphaNumChar, '.');
+
+    printf("%s", out.c_str());
 }
 
 /**
@@ -171,7 +180,7 @@ int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int b
 
 	// send request
 	int nMessage = strlen(message);
-	DebugPrint("ProcessDestServer: sending message to server (%d bytes).. \n%s", nMessage, message);
+//	DebugPrint("ProcessDestServer: sending message to server (%d bytes).. \n%s", nMessage, message);
 	if ( WriteSocket(servSockfd, message, nMessage) != 0 )
 	{
 		DebugPrint("ERROR writing to socket");
@@ -417,10 +426,10 @@ int main(int argc, char *argv[])
 		DebugPrint("ERROR opening listen socket");
 		return 1;
 	}
-	bzero((char *) &serv_addr, sizeof(serv_addr));
+	memset((char *) &serv_addr, 0, sizeof(serv_addr));
 	portno = atoi(argv[1]);
 	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = INADDR_ANY;
+	serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 	serv_addr.sin_port = htons(portno);
 	if (bind(listenSockFd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 	{
@@ -454,3 +463,4 @@ int main(int argc, char *argv[])
 }
 
 // todo rewrite code to c++ 11
+// todo implement CONNECT method
