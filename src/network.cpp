@@ -67,7 +67,7 @@ int ReadFromSocket(HSOCKET sock, char *buffer, int nBuffer, int &nRead)
 			nRead += tmp;
 
 		if (!chunked)
-			chunked = strstr(buffer, "Transfer-Encoding: chunked") != NULL;
+			chunked = strstr(buffer, "Transfer-Encoding: chunked\r\n") != NULL;
 
 		if ( chunked && strstr(buffer, "0\r\n\r\n") != NULL )
 			break;
