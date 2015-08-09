@@ -192,17 +192,6 @@ void MemToString(const unsigned char *mem, const int memSize, char * buff, const
 }
 
 /**
- * Check if str is end of http request
- */
-inline bool IsEndOfChunkedMsg(const char *str)
-{
-	if ( strncmp(str, "0\r\n\r\n", 5) == 0 )
-		return true;
-	else
-		return false;
-}
-
-/**
  * Send request to dest server and read response
  */
 int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int buffSize, int & bytesRead)
