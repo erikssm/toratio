@@ -17,7 +17,8 @@
 #ifndef _WIN32
 #define HSOCKET int
 #else
-#define HSOCKET SOCKET 
+#define HSOCKET SOCKET
+#define socklen_t int
 #endif
 
 int ReadFromSocket(HSOCKET sock, char *buffer, int nData, int &nRead);

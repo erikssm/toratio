@@ -463,8 +463,9 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	HSOCKET listenSockFd, clientSockFd;
-	int clilen, portno;
+	HSOCKET listenSockFd,clientSockFd;
+	socklen_t clilen;
+	int portno;
 	struct sockaddr_in serv_addr, cli_addr;
 	if (argc < 2)
 	{
@@ -521,7 +522,9 @@ int main(int argc, char *argv[])
 
 	DebugPrint("Closing listening socket..");
 	CloseSocket(listenSockFd);
+#ifdef _WIN32
 	WSACleanup();
+#endif
 	DebugPrint("%s has shut down", argv[0]);
 	return 0;
 }
