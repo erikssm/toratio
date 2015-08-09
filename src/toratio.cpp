@@ -445,7 +445,7 @@ void * ProcessClientConn(void *arg)
 	}
 	else if (connectRequest)
 	{
-		char buff[1024];
+		char buff[2048];
 
 		DebugPrint("Processing CONNECT request..");
 
