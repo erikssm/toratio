@@ -237,7 +237,7 @@ int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int b
 void * ProcessClientConn(void *arg)
 {
 	int n;
-	static const char * forbiddenMsg = "HTTP/1.0 403 Forbidden\r\nStatus Code: 403"
+	static const char * msg403 = "HTTP/1.0 403 Forbidden\r\nStatus Code: 403"
 			"\r\nContent-Length: 0"
 			"\r\nConnection: close\r\n\r\n";
 
@@ -281,7 +281,7 @@ void * ProcessClientConn(void *arg)
 		DebugPrint("%s", req.c_str());
 		DebugPrint("This is not GET request, closing..");
 
-		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
+		WriteSocket(clientSockfd, msg403, strlen(msg403));
 
 		CloseSocket(clientSockfd);
 		return NULL;
@@ -334,7 +334,7 @@ void * ProcessClientConn(void *arg)
 	if ( host[0] == 0 )
 	{
 		DebugPrint("Host string not found, closing..");
-		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
+		WriteSocket(clientSockfd, msg403, strlen(msg403));
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
@@ -354,7 +354,7 @@ void * ProcessClientConn(void *arg)
 	{
 		DebugPrint("Unable to resolve hostname (%s)", host);
 
-		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
+		WriteSocket(clientSockfd, msg403, strlen(msg403));
 
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
