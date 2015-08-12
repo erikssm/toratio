@@ -336,30 +336,32 @@ void * ProcessClientConn(void *arg)
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
+	DebugPrint("Request host: (%s)", host);
 
 	// resolve server ip
 	char serverIp[1024];
 	memset(serverIp, 0, 1024);
 
+	// tro to find ip in resolve cache
 	if (s_ipCache.find(host) != s_ipCache.end() )
 	{
 		strcpy(serverIp, s_ipCache[host].c_str());
 		DebugPrint("Found host name \"%s\" (%s) in cache", host, serverIp);
 	}
-
-	if ( *serverIp == 0 && ResolveHostname(host, serverIp, 1024) != 0 )
+	else if ( ResolveHostname(host, serverIp, 1024) != 0 )
 	{
 		DebugPrint("Unable to resolve hostname (%s)", host);
+
 		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
+
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
 	else
 	{
 		s_ipCache[host] = serverIp;
+		DebugPrint("Resolved server ip: %s", serverIp);
 	}
-
-	DebugPrint("Resolved server ip: %s", serverIp);
 
 	if (getRequest)
 	{
@@ -429,8 +431,6 @@ void * ProcessClientConn(void *arg)
 		{
 			DebugPrint("Error retrieving \"uploaded\" param from GET string (\"%s\") ", requestMsg);
 		}
-
-		DebugPrint("Request host: (%s)", host);
 
 		// query dest server
 		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
