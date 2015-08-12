@@ -278,9 +278,11 @@ void * ProcessClientConn(void *arg)
 		replace(req.begin(), req.end(), '\r', '\0');
 		replace(req.begin(), req.end(), '\n', '\0');
 
-		DebugPrint("%s\n", req.c_str());
+		DebugPrint("%s", req.c_str());
 		DebugPrint("This is not GET request, closing..");
+
 		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
+
 		CloseSocket(clientSockfd);
 		return NULL;
 	}
