@@ -5,8 +5,10 @@
 #include <stdarg.h>
 #include <signal.h>
 #include <string>
+#include <iostream>
 #include <sstream>
 #include <algorithm>
+#include <map>
 #ifndef _WIN32
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -23,6 +25,7 @@ using namespace std;
 #define USE_CLIENT_THREADS 		0 // linux only
 
 static const double s_uploadMultiplier = 1.1;
+static map<string, string> s_ipCache;
 static bool stop = false;
 
 void DebugPrint(const char *format, ...); // forward function declaration
@@ -217,7 +220,7 @@ int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int b
 	}
 
 	// read response
-	if ( ReadFromSocket(servSockfd, recvBuff, buffSize, bytesRead) != 0)
+	if ( ReadFromSocket(servSockfd, recvBuff, buffSize - 1, bytesRead) != 0)
 	{
 		DebugPrint("ERROR reading from dest server socket");
 		return -4;
@@ -269,9 +272,13 @@ void * ProcessClientConn(void *arg)
 
 	bool getRequest = strncmp(requestMsg, "GET", 3) == 0;
 	bool connectRequest = strncmp(requestMsg, "CONNECT", 7) == 0;
-	if ( !getRequest && !connectRequest)
+	if ( !getRequest )
 	{
-		DebugPrint("%s\n",requestMsg);
+		string req(requestMsg);
+		replace(req.begin(), req.end(), '\r', '\0');
+		replace(req.begin(), req.end(), '\n', '\0');
+
+		DebugPrint("%s\n", req.c_str());
 		DebugPrint("This is not GET request, closing..");
 		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
 		CloseSocket(clientSockfd);
@@ -333,13 +340,25 @@ void * ProcessClientConn(void *arg)
 	// resolve server ip
 	char serverIp[1024];
 	memset(serverIp, 0, 1024);
-	if ( ResolveHostname(host, serverIp, 1024) != 0 )
+
+	if (s_ipCache.find(host) != s_ipCache.end() )
+	{
+		strcpy(serverIp, s_ipCache[host].c_str());
+		DebugPrint("Found host name \"%s\" (%s) in cache", host, serverIp);
+	}
+
+	if ( *serverIp == 0 && ResolveHostname(host, serverIp, 1024) != 0 )
 	{
 		DebugPrint("Unable to resolve hostname (%s)", host);
 		WriteSocket(clientSockfd, forbiddenMsg, strlen(forbiddenMsg));
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
+	else
+	{
+		s_ipCache[host] = serverIp;
+	}
+
 	DebugPrint("Resolved server ip: %s", serverIp);
 
 	if (getRequest)
