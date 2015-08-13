@@ -240,6 +240,7 @@ void * ProcessClientConn(void *arg)
 	static const char * msg403 = "HTTP/1.0 403 Forbidden\r\nStatus Code: 403"
 			"\r\nContent-Length: 0"
 			"\r\nConnection: close\r\n\r\n";
+	static long suppressed = 0;
 
 	DebugPrint("New client connection");
 
@@ -272,8 +273,10 @@ void * ProcessClientConn(void *arg)
 
 	bool getRequest = strncmp(requestMsg, "GET", 3) == 0;
 	bool connectRequest = strncmp(requestMsg, "CONNECT", 7) == 0;
-	if ( !getRequest )
+	if ( !getRequest && suppressed < 20)
 	{
+		suppressed++;
+
 		string req(requestMsg);
 		replace(req.begin(), req.end(), '\r', '\0');
 		replace(req.begin(), req.end(), '\n', '\0');
@@ -284,6 +287,10 @@ void * ProcessClientConn(void *arg)
 		WriteSocket(clientSockfd, msg403, strlen(msg403));
 
 		CloseSocket(clientSockfd);
+
+		if (suppressed > 19)
+			DebugPrint("\nFurther similar messages will be suppressed\n");
+
 		return NULL;
 	}
 
