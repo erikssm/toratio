@@ -286,7 +286,7 @@ void * ProcessClientConn(void *arg)
 		}
 		nErrReq++;
 
-		if (nErrReq > 19)
+		if (nErrReq == 20)
 			DebugPrint("\nFurther similar messages will be suppressed\n");
 
 		// send 403 message to client
