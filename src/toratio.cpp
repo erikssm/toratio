@@ -287,7 +287,7 @@ void * ProcessClientConn(void *arg)
 		nErrReq++;
 
 		if (nErrReq == 20)
-			DebugPrint("\nFurther similar messages will be suppressed\n");
+			DebugPrint("Further similar messages will be suppressed");
 
 		// send 403 message to client
 		WriteSocket(clientSockfd, msg403, strlen(msg403));
