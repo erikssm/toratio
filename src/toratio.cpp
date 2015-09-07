@@ -564,12 +564,13 @@ int main(int argc, char *argv[])
 
 	HSOCKET listenSockFd,clientSockFd;
 	socklen_t clilen;
-	int portno;
+	int portno = -1;
 	struct sockaddr_in serv_addr, cli_addr;
 	if (argc < 2)
 	{
-		fprintf(stderr, "Usage: %s PORT\n", argv[0]);
-		return 1;
+//		fprintf(stderr, "Usage: %s PORT\n", argv[0]);
+//		return 1;
+		portno = 1234;
 	}
 	fprintf(stdout, "%s running on port %s..\n", argv[0], argv[1]);
 
@@ -583,7 +584,8 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	memset((char *) &serv_addr, 0, sizeof(serv_addr));
-	portno = atoi(argv[1]);
+	if (portno != -1)
+		portno = atoi(argv[1]);
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 	serv_addr.sin_port = htons(portno);
