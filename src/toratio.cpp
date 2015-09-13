@@ -24,6 +24,8 @@ using namespace std;
 #define DEBUG					1
 #define USE_CLIENT_THREADS 		0 // linux only
 
+#define ERR_PARSING_PORT        11
+
 static const double s_uploadMultiplier = 1.1;
 static map<string, string> s_ipCache;
 static bool stop = false;
@@ -585,6 +587,12 @@ int main(int argc, char *argv[])
 	memset((char *) &serv_addr, 0, sizeof(serv_addr));
 	if (argc > 1)
 		portno = atoi(argv[1]);
+
+	if (portno < 1 || portno > 65535)
+	{
+		DebugPrint("Could not convert parameter 1 (\"%s\") into port number", argv[1]);
+		return ERR_PARSING_PORT;
+	}
 
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
