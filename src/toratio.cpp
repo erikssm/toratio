@@ -586,8 +586,6 @@ int main(int argc, char *argv[])
 	if (argc > 1)
 		portno = atoi(argv[1]);
 
-	fprintf(stdout, "%s running on port %d..\n", argv[0], portno);
-
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 	serv_addr.sin_port = htons(portno);
@@ -601,6 +599,8 @@ int main(int argc, char *argv[])
 	}
 	listen(listenSockFd, 5);
 	clilen = sizeof(cli_addr);
+
+	fprintf(stdout, "%s running on port %d..\n", argv[0], portno);
 
 	while (stop != true)
 	{
