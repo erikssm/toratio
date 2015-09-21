@@ -458,7 +458,7 @@ void * ProcessClientConn(void *arg)
 		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
 		if (servSock < 0)
 		{
-			DebugPrint("ERROR invalid server socket descriptor");
+			DebugPrint("ERROR invalid server socket descriptor (CONNECT failed, code: %d)", servSock);
 			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 			return NULL;
 		}
