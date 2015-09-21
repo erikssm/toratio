@@ -23,7 +23,7 @@
 
 int ReadFromSocket(HSOCKET sock, char *buffer, int nData, int &nRead);
 int WriteSocket(HSOCKET sock, const char *buffer, int nData);
-int ResolveHostname(const char * hostname , char* ip, int size);
+int ResolveHostName(const char * hostname , char* ip, int size);
 HSOCKET ConnectSocket(const char *destIP, int port);
 
 #endif /* NETWORK_H_ */

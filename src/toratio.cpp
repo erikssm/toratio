@@ -24,10 +24,12 @@ using namespace std;
 #define DEBUG					1
 #define USE_CLIENT_THREADS 		0 // linux only
 
-#define ERR_PARSING_PORT        11
+#define ERR_CANT_OPEN_LISTEN_SOCK   1
+#define ERR_FAILED_TO_BIND          2
+#define ERR_PARSING_PORT            3
 
 static const double s_uploadMultiplier = 1.1;
-static map<string, string> s_ipCache;
+static map<string, string> s_ipCache; // cache for ip resolve
 static bool stop = false;
 
 void DebugPrint(const char *format, ...); // forward function declaration
@@ -184,7 +186,7 @@ BOOL WINAPI SignalHandler(DWORD s) {
 void MemToString(const unsigned char *mem, const int memSize, char * buff, const int buffSize)
 {
 	int n = 0;
-	for ( int i = 0; (i < memSize) && (n < buffSize - 2); i++)
+	for (int i = 0; (i < memSize) && (n < buffSize - 2); i++)
 	{
 		if ( mem[i] == 10 )
 			snprintf(&buff[n], 4, "\\n ");
@@ -201,7 +203,7 @@ void MemToString(const unsigned char *mem, const int memSize, char * buff, const
  */
 int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int buffSize, int & bytesRead)
 {
-	if ( servSockfd < 1)
+	if (servSockfd < 1)
 	{
 		DebugPrint("ERROR cannot process request: invalid socket");
 		return -1;
@@ -222,7 +224,7 @@ int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int b
 	}
 
 	// read response
-	if ( ReadFromSocket(servSockfd, recvBuff, buffSize - 1, bytesRead) != 0)
+	if (ReadFromSocket(servSockfd, recvBuff, buffSize - 1, bytesRead) != 0)
 	{
 		DebugPrint("ERROR reading from dest server socket");
 		return -4;
@@ -231,6 +233,30 @@ int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int b
 	DebugPrint("Server response (%d bytes): \n%s", bytesRead, recvBuff);
 
 	return 0;
+}
+
+const char * ResolveServerHostName(const char *host, char *serverIp, const int nBuff)
+{
+	// tro to find ip in resolve cache
+	if (s_ipCache.find(host) != s_ipCache.end() )
+	{
+		char serverIp[nBuff];
+		memset(serverIp, 0, nBuff);
+		strncpy(serverIp, s_ipCache[host].c_str(), nBuff - 1);
+		DebugPrint("Found host name \"%s\" (%s) in cache", host, serverIp);
+	}
+	else if ( ResolveHostName(host, serverIp, 1024) != 0 )
+	{
+		DebugPrint("Unable to resolve hostname (%s)", host);
+		return NULL;
+	}
+	else
+	{
+		s_ipCache[host] = serverIp;
+		DebugPrint("Resolved server ip: %s", serverIp);
+	}
+
+	return serverIp;
 }
 
 /**
@@ -258,7 +284,7 @@ void * ProcessClientConn(void *arg)
 	memset(requestMsg, 0, sizeof(requestMsg));
 	DebugPrint("Waiting for request from client..");
 
-	if ( ReadFromSocket(clientSockfd, requestMsg, sizeof(requestMsg) - 1, n) != 0)
+	if (ReadFromSocket(clientSockfd, requestMsg, sizeof(requestMsg) - 1, n) != 0)
 	{
 		DebugPrint("ERROR reading from client socket");
 		CloseSocket(clientSockfd);
@@ -301,9 +327,9 @@ void * ProcessClientConn(void *arg)
 	DebugPrint("New request from client: %s", requestMsg);
 
 	// extract host from header
-	bool hasPort = false;
 	int serverPort = 80;
 	char host[1024];
+	bool hasPort = false;
 	memset(host, 0, 1024);
 	char *pHost = strchr(requestMsg, ' ');
 	if ( pHost != NULL)
@@ -353,27 +379,11 @@ void * ProcessClientConn(void *arg)
 
 	// resolve server ip
 	char serverIp[1024];
-	memset(serverIp, 0, 1024);
-
-	// tro to find ip in resolve cache
-	if (s_ipCache.find(host) != s_ipCache.end() )
+	if (ResolveServerHostName(host, serverIp, 1024) == NULL)
 	{
-		strcpy(serverIp, s_ipCache[host].c_str());
-		DebugPrint("Found host name \"%s\" (%s) in cache", host, serverIp);
-	}
-	else if ( ResolveHostname(host, serverIp, 1024) != 0 )
-	{
-		DebugPrint("Unable to resolve hostname (%s)", host);
-
 		WriteSocket(clientSockfd, msg403, strlen(msg403));
-
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
-	}
-	else
-	{
-		s_ipCache[host] = serverIp;
-		DebugPrint("Resolved server ip: %s", serverIp);
 	}
 
 	if (getRequest)
@@ -387,13 +397,13 @@ void * ProcessClientConn(void *arg)
 			size_t nNewline = newRequest.GetString().find("\r\n", nHost);
 			if (nNewline != string::npos)
 			{
-				stringstream convert;
-				convert << serverPort;
+				stringstream ssPort;
+				ssPort << serverPort;
 
 				string newHostStr("Host: ");
 				newHostStr += string(host);
 				if (hasPort)
-					newHostStr += string(":") + convert.str();
+					newHostStr += string(":") + ssPort.str();
 
 				newRequest.GetString() = newRequest.GetString().replace(nHost, (nNewline - nHost), newHostStr);
 
@@ -404,7 +414,7 @@ void * ProcessClientConn(void *arg)
 					nHttp += 4;
 					string tmp = "http://" + string(host);
 					if (hasPort)
-						tmp += string(":") + convert.str();
+						tmp += string(":") + ssPort.str();
 					newRequest.GetString() = newRequest.GetString().replace(nHttp, tmp.length(), string(""));
 				}
 			}
@@ -582,7 +592,7 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
 		WSACleanup();
 #endif
-		return 1;
+		return ERR_CANT_OPEN_LISTEN_SOCK;
 	}
 	memset((char *) &serv_addr, 0, sizeof(serv_addr));
 	if (argc > 1)
@@ -603,7 +613,7 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
 		WSACleanup();
 #endif
-		return 2;
+		return ERR_FAILED_TO_BIND;
 	}
 	listen(listenSockFd, 5);
 	clilen = sizeof(cli_addr);

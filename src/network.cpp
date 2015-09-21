@@ -111,7 +111,7 @@ int WriteSocket(HSOCKET sock, const char *buffer, int nData)
 /**
  * Resolve host name to ip
  */
-int ResolveHostname(const char * hostname , char* ip, int nIp)
+int ResolveHostName(const char * hostname , char* ip, int nIp)
 {
     struct hostent *he;
     struct in_addr **addr_list;
