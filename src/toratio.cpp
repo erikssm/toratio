@@ -374,7 +374,7 @@ void * ProcessClientConn(void *arg)
 		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 		return NULL;
 	}
-	DebugPrint("Request host: (%s)", host);
+	DebugPrint("Request host: \"%s\", port: %d", host, serverPort);
 
 	// resolve server ip
 	char serverIp[1024];
