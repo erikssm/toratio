@@ -486,60 +486,62 @@ void * ProcessClientConn(void *arg)
 	}
 	else if (connectRequest)
 	{
-		char buff[2048];
+		DebugPrint("HTTP CONNECT is not supported yet");
 
-		DebugPrint("Processing CONNECT request..");
-
-		// query dest server
-		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
-		if (servSock < 0)
-		{
-			DebugPrint("ERROR invalid server socket descriptor (CONNECT failed, code: %d)", servSock);
-			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-			return NULL;
-		}
-		DebugPrint("Connected to destination server (CONNECT)");
-
-		static const char * http200 = "HTTP/1.0 200 Connection established\r\n\r\n";
-		if ( WriteSocket(clientSockfd, http200, strlen(http200)) != 0 )
-		{
-			DebugPrint("ERROR writing to client socket");
-			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-			if ( servSock > 0 ) { CloseSocket(servSock); }
-			return NULL;
-		}
-		DebugPrint("Connected to destination server (CONNECT)");
-
-		// read from client
-		while ( ReadFromSocket(clientSockfd, buff, sizeof(buff), n) == 0 && n > 0)
-		{
-			DebugPrint("(CONNECT) read from client %d bytes: %s", n, buff);
-			// send to server
-			if ( WriteSocket(servSock, buff, n) != 0 )
-			{
-				DebugPrint("ERROR writing to server socket (CONNECT, msg:\"%s\")", buff);
-				break;
-			}
-			DebugPrint("(CONNECT) sent to server %d bytes: %s", n, buff);
-
-			// read server response
-			if ( ReadFromSocket(servSock, buff, sizeof(buff), n) != 0 && n > 0)
-			{
-				DebugPrint("ERROR reading server response (CONNECT)");
-				break;
-			}
-			DebugPrint("(CONNECT) read from server %d bytes: %s", n, buff);
-
-			// send back to client
-			if ( WriteSocket(clientSockfd, buff, n) != 0 )
-			{
-				DebugPrint("ERROR writing to client socket (CONNECT, msg:\"%s\")", buff);
-				break;
-			}
-			DebugPrint("(CONNECT) sent back to client %d bytes: %s", n, buff);
-		}
-
-		if ( servSock > 0 ) { CloseSocket(servSock); }
+//		char buff[2048];
+//
+//		DebugPrint("Processing CONNECT request..");
+//
+//		// query dest server
+//		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
+//		if (servSock < 0)
+//		{
+//			DebugPrint("ERROR invalid server socket descriptor (CONNECT failed, code: %d)", servSock);
+//			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+//			return NULL;
+//		}
+//		DebugPrint("Connected to destination server (CONNECT)");
+//
+//		static const char * http200 = "HTTP/1.0 200 Connection established\r\n\r\n";
+//		if ( WriteSocket(clientSockfd, http200, strlen(http200)) != 0 )
+//		{
+//			DebugPrint("ERROR writing to client socket");
+//			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+//			if ( servSock > 0 ) { CloseSocket(servSock); }
+//			return NULL;
+//		}
+//		DebugPrint("Connected to destination server (CONNECT)");
+//
+//		// read from client
+//		while ( ReadFromSocket(clientSockfd, buff, sizeof(buff), n) == 0 && n > 0)
+//		{
+//			DebugPrint("(CONNECT) read from client %d bytes: %s", n, buff);
+//			// send to server
+//			if ( WriteSocket(servSock, buff, n) != 0 )
+//			{
+//				DebugPrint("ERROR writing to server socket (CONNECT, msg:\"%s\")", buff);
+//				break;
+//			}
+//			DebugPrint("(CONNECT) sent to server %d bytes: %s", n, buff);
+//
+//			// read server response
+//			if ( ReadFromSocket(servSock, buff, sizeof(buff), n) != 0 && n > 0)
+//			{
+//				DebugPrint("ERROR reading server response (CONNECT)");
+//				break;
+//			}
+//			DebugPrint("(CONNECT) read from server %d bytes: %s", n, buff);
+//
+//			// send back to client
+//			if ( WriteSocket(clientSockfd, buff, n) != 0 )
+//			{
+//				DebugPrint("ERROR writing to client socket (CONNECT, msg:\"%s\")", buff);
+//				break;
+//			}
+//			DebugPrint("(CONNECT) sent back to client %d bytes: %s", n, buff);
+//		}
+//
+//		if ( servSock > 0 ) { CloseSocket(servSock); }
 	}
 
 	DebugPrint("Client request process finished succesfully, closing socket");
