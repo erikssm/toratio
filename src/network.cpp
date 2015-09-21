@@ -1,6 +1,8 @@
 #include "toratio.h"
 #include "network.h"
 
+#define ERR_CONNECT_FAILED -5
+
 /**
  * Remove chunk size information from chunked HTTP response
  */
@@ -165,7 +167,7 @@ HSOCKET ConnectSocket(const char *destIP, int port)
 	if (connect(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 	{
 		printf("ERROR : Connect Failed (ip: %s, port: %d) \n", destIP, port);
-		return -10;
+		return ERR_CONNECT_FAILED;
 	}
 
 	return sockfd;
