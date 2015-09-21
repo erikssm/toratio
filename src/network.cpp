@@ -164,7 +164,7 @@ HSOCKET ConnectSocket(const char *destIP, int port)
 
 	if (connect(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 	{
-		printf("ERROR : Connect Failed \n");
+		printf("ERROR : Connect Failed (ip: %s, port: %d) \n", destIP, port);
 		return -10;
 	}
 
