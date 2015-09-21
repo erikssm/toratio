@@ -240,7 +240,6 @@ const char * ResolveServerHostName(const char *host, char *serverIp, const int n
 	// tro to find ip in resolve cache
 	if (s_ipCache.find(host) != s_ipCache.end() )
 	{
-		char serverIp[nBuff];
 		memset(serverIp, 0, nBuff);
 		strncpy(serverIp, s_ipCache[host].c_str(), nBuff - 1);
 		DebugPrint("Found host name \"%s\" (%s) in cache", host, serverIp);
