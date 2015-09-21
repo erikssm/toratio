@@ -21,6 +21,9 @@
 #define socklen_t int
 #endif
 
+#define ERR_CONNECT_FAILED    -5
+#define ERR_PTON_ERROR        -6
+
 int ReadFromSocket(HSOCKET sock, char *buffer, int nData, int &nRead);
 int WriteSocket(HSOCKET sock, const char *buffer, int nData);
 int ResolveHostName(const char * hostname , char* ip, int size);

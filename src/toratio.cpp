@@ -494,7 +494,7 @@ void * ProcessClientConn(void *arg)
 		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
 		if (servSock < 0)
 		{
-			DebugPrint("ERROR invalid server socket descriptor (CONNECT)");
+			DebugPrint("ERROR invalid server socket descriptor (CONNECT failed, code: %d)", servSock);
 			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 			return NULL;
 		}
@@ -503,7 +503,7 @@ void * ProcessClientConn(void *arg)
 		static const char * http200 = "HTTP/1.0 200 Connection established\r\n\r\n";
 		if ( WriteSocket(clientSockfd, http200, strlen(http200)) != 0 )
 		{
-			DebugPrint("ERROR writing to client socket (CONNECT)");
+			DebugPrint("ERROR writing to client socket");
 			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 			if ( servSock > 0 ) { CloseSocket(servSock); }
 			return NULL;
