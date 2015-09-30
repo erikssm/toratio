@@ -58,7 +58,7 @@ public:
 	/**
 	 * Return value of GET string
 	 */
-	string GetParameterValue(const string& name)
+	string getParameterValue(const string& name)
 	{
 		string ret;
 
@@ -67,10 +67,79 @@ public:
 		{
 			pos1 += name.length() + 1;
 			size_t pos2 = m_getString.find("&", pos1);
+			if (pos2 == std::string::npos)
+				pos2 = m_getString.find(" ", pos1);
 			if (pos2 != std::string::npos)
 				ret = m_getString.substr(pos1, (pos2 - pos1));
 		}
 		return ret;
+	}
+
+	/**
+	 * Get host:port from GET request
+	 */
+	string getHostAndPort()
+	{
+		string firstLine = m_getString;
+		size_t n = m_getString.find("\n\r");
+		if (n != std::string::npos)
+			firstLine = m_getString.substr(0, n + 1);
+
+		string search1 = "GET http";
+
+		size_t end = -1;
+		size_t start = firstLine.find(search1, 0);
+
+		if (start != std::string::npos)
+			start = firstLine.find("://", start + search1.length());
+
+		if (start == std::string::npos)
+		{
+			return "";
+		}
+
+		end = firstLine.find("/", start + 3);
+		if (end == std::string::npos)
+		{
+			cout << "end not found" << endl;
+			return "";
+		}
+
+		string host = firstLine.substr(start + 3, end - (start + 3));
+
+		return host;
+	}
+
+	/**
+	 * Get port from GET request
+	 */
+	string getPort()
+	{
+		string port = "";
+		string hp = getHostAndPort();
+		size_t pos = hp.find(":");
+		if (pos != std::string::npos)
+		{
+			port = hp.substr(pos + 1, hp.length() - pos - 1);
+		}
+
+		return port;
+	}
+
+	/**
+	 * Get host from GET request
+	 */
+	string getHost()
+	{
+		string hp = getHostAndPort();
+		string port = hp;
+		size_t pos = hp.find(":");
+		if (pos != std::string::npos)
+		{
+			port = hp.substr(0, pos);
+		}
+
+		return port;
 	}
 
 	/**
@@ -80,7 +149,7 @@ public:
 	{
 		error = false;
 		char *pError = NULL;
-		long nBytes = strtol(GetParameterValue(name).c_str(), &pError, 10);
+		long nBytes = strtol(getParameterValue(name).c_str(), &pError, 10);
 		if (pError != NULL && *pError != 0)
 			error = true;
 
@@ -201,7 +270,7 @@ void MemToString(const unsigned char *mem, const int memSize, char * buff, const
 /**
  * Send request to dest server and read response
  */
-int ProcessDestServer(int servSockfd, const char *message, char *recvBuff, int buffSize, int & bytesRead)
+int QueryDestinationServer(int servSockfd, const char *message, char *recvBuff, int buffSize, int & bytesRead)
 {
 	if (servSockfd < 1)
 	{
@@ -261,7 +330,7 @@ const char * ResolveServerHostName(const char *host, char *serverIp, const int n
 /**
  *	Process GET request from client
  */
-void * ProcessClientConn(void *arg)
+void * ProcessClientRequest(void *arg)
 {
 	int n;
 	static const char * msg403 = "HTTP/1.0 403 Forbidden\r\nStatus Code: 403"
@@ -270,7 +339,6 @@ void * ProcessClientConn(void *arg)
 
 	DebugPrint("New client connection");
 
-	char requestMsg[1024 * 2];
 	HSOCKET clientSockfd = *((int *)arg);
 
 	if (clientSockfd < 0)
@@ -280,9 +348,10 @@ void * ProcessClientConn(void *arg)
 	}
 
 	// read command from client
-	memset(requestMsg, 0, sizeof(requestMsg));
 	DebugPrint("Waiting for request from client..");
 
+	char requestMsg[1024 * 2];
+	memset(requestMsg, 0, sizeof(requestMsg));
 	if (ReadFromSocket(clientSockfd, requestMsg, sizeof(requestMsg) - 1, n) != 0)
 	{
 		DebugPrint("ERROR reading from client socket");
@@ -323,71 +392,91 @@ void * ProcessClientConn(void *arg)
 		return NULL;
 	}
 
-	DebugPrint("New request from client: %s", requestMsg);
-
 	// extract host from header
-	int serverPort = 80;
-	char host[1024];
-	bool hasPort = false;
-	memset(host, 0, 1024);
-	char *pHost = strchr(requestMsg, ' ');
-	if ( pHost != NULL)
-	{
-		pHost++; // skip blank
-		char *pStart;
-		if (getRequest)
-			pStart = strchr(pHost, '/');
-		else
-			pStart = pHost;
-		char *pEnd = NULL;
-		if ( pStart != NULL )
-		{
-			if (getRequest)
-			{
-				pStart += 2; // skip '//'
-				pEnd = strchr(pStart, '/');
-			}
-			else if (connectRequest)
-			{
-				pEnd = strchr(pStart, ' ');
-			}
-		}
-		if (pStart != NULL && pEnd != NULL )
-		{
-			strncpy(host, pStart, pEnd - pStart);
-		}
-
-		// check if port is present
-		char *pColon = strchr(host, ':');
-		if (pColon != NULL)
-		{
-			*pColon = 0;
-			serverPort = strtol(++pColon, NULL, 10);
-			hasPort = true;
-			DebugPrint("Setting destination server port to %d", serverPort);
-		}
-	}
-	if ( host[0] == 0 )
-	{
-		DebugPrint("Host string not found, closing..");
-		WriteSocket(clientSockfd, msg403, strlen(msg403));
-		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-		return NULL;
-	}
-	DebugPrint("Request host: \"%s\", port: %d", host, serverPort);
-
-	// resolve server ip
-	char serverIp[1024];
-	if (ResolveServerHostName(host, serverIp, 1024) == NULL)
-	{
-		WriteSocket(clientSockfd, msg403, strlen(msg403));
-		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-		return NULL;
-	}
+	/**
+	 * GET http://testing.com/ann?uk=lsdfjlsdf&info_hash=%06%ceE%f8ac%e9%ff%aa%cd%83%f4p%dc%111%ac~%5c%27&peer_id=-BE9223-1Bh.R0uW.xeO&port=58000&uploaded=0&downloaded=0&left=12080071962&corrupt=0&redundant=0&compact=1&numwant=200&key=3434349c&no_peer_id=1&supportcrypto=1&event=started&ipv4=11.111.11.111 HTTP/1.1
+		Host: localhost:1234
+		User-Agent: Deluge 1.3.6
+		Accept-Encoding: gzip
+		Connection: close
+	 *
+	 */
+//	int serverPort = 80;
+//	char host[1024];
+//	bool hasPort = false;
+//	memset(host, 0, 1024);
+//	char *pHost = strchr(requestMsg, ' ');
+//	if ( pHost != NULL)
+//	{
+//		pHost++; // skip blank
+//		char *pStart;
+//		if (getRequest)
+//			pStart = strchr(pHost, '/');
+//		else
+//			pStart = pHost;
+//		char *pEnd = NULL;
+//		if ( pStart != NULL )
+//		{
+//			if (getRequest)
+//			{
+//				pStart += 2; // skip '//'
+//				pEnd = strchr(pStart, '/');
+//			}
+//			else if (connectRequest)
+//			{
+//				pEnd = strchr(pStart, ' ');
+//			}
+//		}
+//		if (pStart != NULL && pEnd != NULL )
+//		{
+//			strncpy(host, pStart, pEnd - pStart);
+//		}
+//
+//		// check if port is present
+//		char *pColon = strchr(host, ':');
+//		if (pColon != NULL)
+//		{
+//			*pColon = 0;
+//			serverPort = strtol(++pColon, NULL, 10);
+//			hasPort = true;
+//			DebugPrint("Setting destination server port to %d", serverPort);
+//		}
+//	}
+//	if ( host[0] == 0 )
+//	{
+//		DebugPrint("Host string not found, closing..");
+//		WriteSocket(clientSockfd, msg403, strlen(msg403));
+//		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+//		return NULL;
+//	}
 
 	if (getRequest)
 	{
+		DebugPrint("New GET request from client: %s", requestMsg);
+
 		GetRequest newRequest(requestMsg);
+		string host = newRequest.getHost();
+
+		int serverPort = -1;
+		bool hasPort = false;
+		string port = newRequest.getPort();
+		if (port != "")
+		{
+			serverPort = strtol(newRequest.getPort().c_str(), NULL, 10);
+			hasPort = true;
+		}
+		else
+			serverPort = 80;
+		DebugPrint("Request host: \"%s\", port: %d", host.c_str(), serverPort);
+
+		// resolve server ip
+		char serverIp[1024];
+		if (ResolveServerHostName(host.c_str(), serverIp, 1024) == NULL)
+		{
+			WriteSocket(clientSockfd, msg403, strlen(msg403));
+			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
+			return NULL;
+		}
 
 		// replace host name
 		size_t nHost = newRequest.GetString().find("Host: ");
@@ -467,7 +556,7 @@ void * ProcessClientConn(void *arg)
 		int buffSize = 1024 * 1024 * 5;
 		char *buffResp = (char *)malloc(buffSize * sizeof(char));
 		DebugPrint("Processing request: %s", newRequest.c_str());
-		int proc = ProcessDestServer(servSock, newRequest.c_str(), buffResp, buffSize, bytesRead);
+		int proc = QueryDestinationServer(servSock, newRequest.c_str(), buffResp, buffSize, bytesRead);
 		if ( proc != 0 )
 		{
 			DebugPrint("ERROR in ProcessDestServer (%d)", proc);
@@ -581,8 +670,6 @@ int main(int argc, char *argv[])
 	struct sockaddr_in serv_addr, cli_addr;
 	if (argc < 2)
 	{
-//		fprintf(stderr, "Usage: %s PORT\n", argv[0]);
-//		return 1;
 		portno = 1234;
 	}
 
@@ -631,14 +718,14 @@ int main(int argc, char *argv[])
 		{
 #ifndef _WIN32
 			pthread_t t;
-			pthread_create(&t, NULL, &ProcessClientConn, &clientSockFd);
+			pthread_create(&t, NULL, &ProcessClientRequest, &clientSockFd);
 #else
-			ProcessClientConn(&clientSockFd);
+			ProcessClientRequest(&clientSockFd);
 #endif
 		}
 		else
 		{
-			ProcessClientConn(&clientSockFd);
+			ProcessClientRequest(&clientSockFd);
 		}
 	}
 
