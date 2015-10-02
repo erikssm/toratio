@@ -304,6 +304,9 @@ int QueryDestinationServer(int servSockfd, const char *message, char *recvBuff, 
 	return 0;
 }
 
+/**
+ * Resolve host name
+ */
 const char * ResolveServerHostName(const char *host, char *serverIp, const int nBuff)
 {
 	// tro to find ip in resolve cache
@@ -705,7 +708,7 @@ int main(int argc, char *argv[])
 	serv_addr.sin_port = htons(portno);
 	if (bind(listenSockFd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 	{
-		DebugPrint("ERROR on binding");
+		DebugPrint("ERROR on binding listening socket, quitting..");
 #ifdef _WIN32
 		WSACleanup();
 #endif
