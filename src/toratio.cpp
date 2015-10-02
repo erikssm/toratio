@@ -45,7 +45,7 @@ public:
 		m_getString = src;
 	}
 
-	string& GetString()
+	string& getString()
 	{
 		return m_getString;
 	}
@@ -145,7 +145,7 @@ public:
 	/**
 	 * Return value of GET string
 	 */
-	long long GetParameterValueLLong(const string& name, bool& error)
+	long long getParameterValueLLong(const string& name, bool& error)
 	{
 		error = false;
 		char *pError = NULL;
@@ -159,7 +159,7 @@ public:
 	/**
 	 * Set value of GET string
 	 */
-	void SetParameterValue(const string& param, const string& value)
+	void setParameterValue(const string& param, const string& value)
 	{
 		string ret;
 
@@ -454,19 +454,20 @@ void * ProcessClientRequest(void *arg)
 	{
 		DebugPrint("New GET request from client: %s", requestMsg);
 
-		GetRequest newRequest(requestMsg);
-		string host = newRequest.getHost();
+		GetRequest request(requestMsg);
 
 		int serverPort = -1;
 		bool hasPort = false;
-		string port = newRequest.getPort();
+		string port = request.getPort();
 		if (port != "")
 		{
-			serverPort = strtol(newRequest.getPort().c_str(), NULL, 10);
+			serverPort = strtol(request.getPort().c_str(), NULL, 10);
 			hasPort = true;
 		}
 		else
 			serverPort = 80;
+
+		string host = request.getHost();
 		DebugPrint("Request host: \"%s\", port: %d", host.c_str(), serverPort);
 
 		// resolve server ip
@@ -479,10 +480,10 @@ void * ProcessClientRequest(void *arg)
 		}
 
 		// replace host name
-		size_t nHost = newRequest.GetString().find("Host: ");
+		size_t nHost = request.getString().find("Host: ");
 		if (nHost != string::npos)
 		{
-			size_t nNewline = newRequest.GetString().find("\r\n", nHost);
+			size_t nNewline = request.getString().find("\r\n", nHost);
 			if (nNewline != string::npos)
 			{
 				stringstream ssPort;
@@ -493,27 +494,27 @@ void * ProcessClientRequest(void *arg)
 				if (hasPort)
 					newHostStr += string(":") + ssPort.str();
 
-				newRequest.GetString() = newRequest.GetString().replace(nHost, (nNewline - nHost), newHostStr);
+				request.getString() = request.getString().replace(nHost, (nNewline - nHost), newHostStr);
 
 				// replace GET string
-				size_t nHttp = newRequest.GetString().find("GET http");
+				size_t nHttp = request.getString().find("GET http");
 				if (nHttp != string::npos)
 				{
 					nHttp += 4;
 					string tmp = "http://" + string(host);
 					if (hasPort)
 						tmp += string(":") + ssPort.str();
-					newRequest.GetString() = newRequest.GetString().replace(nHttp, tmp.length(), string(""));
+					request.getString() = request.getString().replace(nHttp, tmp.length(), string(""));
 				}
 			}
 		}
 
 		// modify uploaded parameter
 		bool error;
-		long long nUpBytes = newRequest.GetParameterValueLLong("uploaded", error);
+		long long nUpBytes = request.getParameterValueLLong("uploaded", error);
 		if (!error)
 		{
-			long long nDownBytes = newRequest.GetParameterValueLLong("downloaded", error);
+			long long nDownBytes = request.getParameterValueLLong("downloaded", error);
 			long long newBytes = 0;
 			if (!error)
 			{
@@ -533,7 +534,7 @@ void * ProcessClientRequest(void *arg)
 				stringstream convert;
 				convert << newBytes;
 				DebugPrint("Setting \"uploaded\" to \"%s\"", convert.str().c_str());
-				newRequest.SetParameterValue("uploaded", convert.str());
+				request.setParameterValue("uploaded", convert.str());
 			}
 			else
 				DebugPrint("Error: uploaded bytes < 0 (original request: \"%s\")", requestMsg);
@@ -552,11 +553,18 @@ void * ProcessClientRequest(void *arg)
 			return NULL;
 		}
 
+		DebugPrint("Processing request: %s", request.c_str());
+
 		int bytesRead = 0;
 		int buffSize = 1024 * 1024 * 5;
 		char *buffResp = (char *)malloc(buffSize * sizeof(char));
-		DebugPrint("Processing request: %s", newRequest.c_str());
-		int proc = QueryDestinationServer(servSock, newRequest.c_str(), buffResp, buffSize, bytesRead);
+		if (buffResp == NULL)
+		{
+			DebugPrint("Not enough free memory, cant send request to destination server..");
+			return NULL;
+		}
+
+		int proc = QueryDestinationServer(servSock, request.c_str(), buffResp, buffSize, bytesRead);
 		if ( proc != 0 )
 		{
 			DebugPrint("ERROR in ProcessDestServer (%d)", proc);
