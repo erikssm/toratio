@@ -1,9 +1,10 @@
 #ifndef NETWORK_H_
 #define NETWORK_H_
-#include "toratio.h"
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <memory>
+#include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -24,9 +25,28 @@
 #define ERR_CONNECT_FAILED    -5
 #define ERR_PTON_ERROR        -6
 
-int ReadFromSocket(HSOCKET sock, char *buffer, int nData, int &nRead);
-int WriteSocket(HSOCKET sock, const char *buffer, int nData);
-int ResolveHostName(const char * hostname , char* ip, int size);
-HSOCKET ConnectSocket(const char *destIP, int port);
+using DataVector = std::vector<char>;
+
+namespace toratio
+{
+class Socket
+{
+public:
+	Socket(const std::string& destIP, int port);
+	Socket(HSOCKET socket);
+	~Socket();
+	operator HSOCKET() const;
+
+private:
+	Socket() = delete;
+	HSOCKET m_socket;
+};
+using SocketPtr = std::unique_ptr<Socket>;
+}
+
+int ReadFromSocket(HSOCKET sock, DataVector& buffer, int &nRead);
+int WriteSocket(HSOCKET sock, const DataVector& buffer, size_t bytes);
+std::string ResolveHostName(const std::string& hostname);
+HSOCKET ConnectSocket(const std::string& destIP, int port);
 
 #endif /* NETWORK_H_ */

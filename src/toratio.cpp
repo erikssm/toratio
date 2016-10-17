@@ -1,189 +1,53 @@
-#include "toratio.h"
+#include <algorithm>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <memory>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <iosfwd>
 #include <string>
-#include <iostream>
-#include <sstream>
-#include <algorithm>
-#include <map>
 #ifndef _WIN32
-#include <unistd.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <unistd.h>
 #else
 #include <winsock2.h>
 #endif
-
+#include "HttpGETRequest.h"
 #include "network.h"
+#include "toratio.h"
 
 using namespace std;
 
 #define DEBUG					1
 #define USE_CLIENT_THREADS 		0 // linux only
 
-#define ERR_CANT_OPEN_LISTEN_SOCK   1
-#define ERR_FAILED_TO_BIND          2
-#define ERR_PARSING_PORT            3
+int 		g_daemon {}; // daemon mode
+string 		g_listenPort {};
 
-static const double s_uploadMultiplier = 1.1;
-static map<string, string> s_ipCache; // cache for ip resolve
-static bool stop = false;
+namespace
+{
+enum class EXIT_CODES
+{
+	FAIL_OPEN_LISTEN_SOCK = 1,
+	FAIL_TO_BIND,
+	FAIL_PARSING_PORT,
+	INVALID_ARGUMENTS
+};
+
+constexpr int 		socketQueueSize {20};
+constexpr double 	uploadMultiplier {1.1};
+constexpr char 		logFile[] = "/tmp/toratio.log";
+
+bool stop = false;
+} // namespace
 
 void DebugPrint(const char *format, ...); // forward function declaration
 
-class GetRequest
-{
-private:
-	string m_getString;
-public:
-
-	GetRequest(const string& src)
-	{
-		m_getString = src;
-	}
-
-	string& getString()
-	{
-		return m_getString;
-	}
-
-	const char * c_str()
-	{
-		return m_getString.c_str();
-	}
-
-	/**
-	 * Return value of GET string
-	 */
-	string getParameterValue(const string& name)
-	{
-		string ret;
-
-		size_t pos1 = m_getString.find(name + "=");
-		if (pos1 != std::string::npos)
-		{
-			pos1 += name.length() + 1;
-			size_t pos2 = m_getString.find("&", pos1);
-			if (pos2 == std::string::npos)
-				pos2 = m_getString.find(" ", pos1);
-			if (pos2 != std::string::npos)
-				ret = m_getString.substr(pos1, (pos2 - pos1));
-		}
-		return ret;
-	}
-
-	/**
-	 * Get host:port from GET request
-	 */
-	string getHostAndPort()
-	{
-		string firstLine = m_getString;
-		size_t n = m_getString.find("\n\r");
-		if (n != std::string::npos)
-			firstLine = m_getString.substr(0, n + 1);
-
-		string search1 = "GET http";
-
-		size_t end = -1;
-		size_t start = firstLine.find(search1, 0);
-
-		if (start != std::string::npos)
-			start = firstLine.find("://", start + search1.length());
-
-		if (start == std::string::npos)
-		{
-			return "";
-		}
-
-		end = firstLine.find("/", start + 3);
-		if (end == std::string::npos)
-		{
-			cout << "end not found" << endl;
-			return "";
-		}
-
-		string host = firstLine.substr(start + 3, end - (start + 3));
-
-		return host;
-	}
-
-	/**
-	 * Get port from GET request
-	 */
-	string getPort()
-	{
-		string port = "";
-		string hp = getHostAndPort();
-		size_t pos = hp.find(":");
-		if (pos != std::string::npos)
-		{
-			port = hp.substr(pos + 1, hp.length() - pos - 1);
-		}
-
-		return port;
-	}
-
-	/**
-	 * Get host from GET request
-	 */
-	string getHost()
-	{
-		string hp = getHostAndPort();
-		string port = hp;
-		size_t pos = hp.find(":");
-		if (pos != std::string::npos)
-		{
-			port = hp.substr(0, pos);
-		}
-
-		return port;
-	}
-
-	/**
-	 * Return value of GET string
-	 */
-	long long getParameterValueLLong(const string& name, bool& error)
-	{
-		error = false;
-		char *pError = NULL;
-		long nBytes = strtol(getParameterValue(name).c_str(), &pError, 10);
-		if (pError != NULL && *pError != 0)
-			error = true;
-
-		return nBytes;
-	}
-
-	/**
-	 * Set value of GET string
-	 */
-	void setParameterValue(const string& param, const string& value)
-	{
-		string ret;
-
-		size_t pos = m_getString.find(param + "=");
-		if (pos != std::string::npos)
-		{
-			size_t pos2 = m_getString.find("&", pos);
-			string bytes = m_getString.substr(pos + param.length() + 1, (pos2 - pos - 1));
-			m_getString = m_getString.substr(0, pos + param.length()) + "=" + value + m_getString.substr(pos2);
-		}
-	}
-};
-
-/**
- *	Closes socket
- */
-void CloseSocket(HSOCKET s)
-{
-#ifdef _WIN32
-	closesocket(s);
-#else
-	close(s);
-#endif
-}
 /**
  * Returns true if char is not alphanumeric
  */
@@ -193,6 +57,7 @@ inline bool IsNotAlphaNumChar(const char c)
 		return true;
 	return false;
 }
+
 /**
  * Print debug message
  */
@@ -203,7 +68,7 @@ void DebugPrint(const char *format, ...)
 
     va_list args;
     va_start(args, format);
-    char buff[1024]; // get rid of this hard-coded buffer
+    char buff[1024];
     char tmp[1024];
 #ifndef _WIN32
     pthread_t id = pthread_self();
@@ -215,10 +80,24 @@ void DebugPrint(const char *format, ...)
     va_end(args);
 
     // replace non alpha characters
-    string out(buff);
-    replace_if(out.begin(), out.end(), IsNotAlphaNumChar, '.');
+    string out{buff};
+	replace_if(out.begin(), out.end(), IsNotAlphaNumChar, '.');
 
-    printf("%s", out.c_str());
+    if( !g_daemon )
+    {
+    	printf("%s", out.c_str());
+    }
+    else
+    {
+    	// print to file
+    	static std::ofstream log;
+    	if( !log.is_open() )
+    	{
+			log.open(logFile, ofstream::out | ofstream::app);
+			log << std::endl << "-------------toratio log------------" << std::endl;
+    	}
+    	log << out;
+    }
 }
 
 #ifndef _WIN32
@@ -227,7 +106,18 @@ void DebugPrint(const char *format, ...)
  */
 void SignalHandler(int s)
 {
-	printf("\nReceived signal 0x%x \n",s);
+	if( SIGINT == s )
+	{
+		printf("Received signal SIGINT\n");
+	}
+	else if( SIGTERM == s )
+	{
+		printf("Received signal SIGTERM \n");
+	}
+	else
+	{
+		printf("Received signal 0x%x \n",s);
+	}
 	stop = true;
 }
 
@@ -239,9 +129,8 @@ BOOL WINAPI SignalHandler(DWORD s) {
 
 	if (s == CTRL_C_EVENT)
 	{
-		printf("\nReceived signal 0x%x \n", s);
-		stop = true;		
-		WSACleanup();
+		printf("Received signal 0x%x \n", s);
+		stop = true;
 	}
 
 	return TRUE;
@@ -252,10 +141,10 @@ BOOL WINAPI SignalHandler(DWORD s) {
  * Prints memory in hex format
  * buff must be 3x mem ( i.e. each byte = 2 chars )
  */
-void MemToString(const unsigned char *mem, const int memSize, char * buff, const int buffSize)
+void MemToString(const unsigned char *mem, const int nMem, char * buff, const int nBuff)
 {
 	int n = 0;
-	for (int i = 0; (i < memSize) && (n < buffSize - 2); i++)
+	for (int i = 0; (i < nMem) && (n < nBuff - 2); i++)
 	{
 		if ( mem[i] == 10 )
 			snprintf(&buff[n], 4, "\\n ");
@@ -270,7 +159,7 @@ void MemToString(const unsigned char *mem, const int memSize, char * buff, const
 /**
  * Send request to dest server and read response
  */
-int QueryDestinationServer(int servSockfd, const char *message, char *recvBuff, int buffSize, int & bytesRead)
+int QueryDestinationServer(HSOCKET servSockfd, const string& message, std::vector< char >& recvBuff, int & bytesRead)
 {
 	if (servSockfd < 1)
 	{
@@ -278,24 +167,26 @@ int QueryDestinationServer(int servSockfd, const char *message, char *recvBuff, 
 		return -1;
 	}
 
-	if ( recvBuff == NULL )
-		return -2;
-
-	memset(recvBuff, 0, buffSize * sizeof(char));
+	if( message.empty() )
+	{
+		DebugPrint("ERROR cannot process request: message is empty");
+		return -1;
+	}
 
 	// send request
-	int nMessage = strlen(message);
 //	DebugPrint("ProcessDestServer: sending message to server (%d bytes).. \n%s", nMessage, message);
-	if ( WriteSocket(servSockfd, message, nMessage) != 0 )
+	DataVector data;
+	std::copy(message.begin(), message.end(), std::back_inserter(data));
+	if ( WriteSocket(servSockfd, data, data.size()) != 0 )
 	{
-		DebugPrint("ERROR writing to socket");
+		DebugPrint("ERROR writing to destination server socket");
 		return -3;
 	}
 
 	// read response
-	if (ReadFromSocket(servSockfd, recvBuff, buffSize - 1, bytesRead) != 0)
+	if (ReadFromSocket(servSockfd, recvBuff, bytesRead) != 0)
 	{
-		DebugPrint("ERROR reading from dest server socket");
+		DebugPrint("ERROR reading from destination server socket");
 		return -4;
 	}
 
@@ -304,30 +195,34 @@ int QueryDestinationServer(int servSockfd, const char *message, char *recvBuff, 
 	return 0;
 }
 
+
 /**
- * Resolve host name
+ * Resolve host name and return IP
  */
-const char * ResolveServerHostName(const char *host, char *serverIp, const int nBuff)
+const string ResolveServerHostName(const string& host)
 {
-	// tro to find ip in resolve cache
+	static map<string, string> s_ipCache;
+	string ip;
+
+	// try to find ip in resolve cache
 	if (s_ipCache.find(host) != s_ipCache.end() )
 	{
-		memset(serverIp, 0, nBuff);
-		strncpy(serverIp, s_ipCache[host].c_str(), nBuff - 1);
-		DebugPrint("Found host name \"%s\" (%s) in cache", host, serverIp);
-	}
-	else if ( ResolveHostName(host, serverIp, 1024) != 0 )
-	{
-		DebugPrint("Unable to resolve hostname (%s)", host);
-		return NULL;
-	}
-	else
-	{
-		s_ipCache[host] = serverIp;
-		DebugPrint("Resolved server ip: %s", serverIp);
+		ip = s_ipCache[host];
+		DebugPrint("Found host name \"%s\" (%s) in cache", host.c_str(), ip.c_str());
+		return ip;
 	}
 
-	return serverIp;
+	ip = ResolveHostName(host);
+	if (  ip.empty() )
+	{
+		DebugPrint("Unable to resolve hostname (%s)", host.c_str());
+		return ip;
+	}
+
+	s_ipCache[host] = ip;
+	DebugPrint("Resolved server ip: %s", ip.c_str());
+
+	return ip;
 }
 
 /**
@@ -336,63 +231,71 @@ const char * ResolveServerHostName(const char *host, char *serverIp, const int n
 void * ProcessClientRequest(void *arg)
 {
 	int n;
-	static const char * msg403 = "HTTP/1.0 403 Forbidden\r\nStatus Code: 403"
-			"\r\nContent-Length: 0"
-			"\r\nConnection: close\r\n\r\n";
+	DataVector msg403;
+	{
+		const string str403 { "HTTP/1.0 403 Forbidden\r\nStatus Code: 403"
+				"\r\nContent-Length: 0"
+				"\r\nConnection: close\r\n\r\n"
+		};
+		std::copy(str403.begin(), str403.end(), std::back_inserter(msg403));
+	}
 
 	DebugPrint("New client connection");
 
-	HSOCKET clientSockfd = *((int *)arg);
-
-	if (clientSockfd < 0)
+	toratio::SocketPtr clientSocket;
+	try
 	{
-		DebugPrint("ERROR invalid socket descriptor");
-		return NULL;
+		clientSocket.reset( new toratio::Socket{ *(HSOCKET *)arg });
+	} catch( std::exception& ex )
+	{
+		DebugPrint("ERROR could not create socket: %s", ex.what());
+		return nullptr;
+	} catch( ... )
+	{
+		DebugPrint("ERROR could not create socket (unknown error)");
+		return nullptr;
 	}
 
 	// read command from client
 	DebugPrint("Waiting for request from client..");
 
-	char requestMsg[1024 * 2];
-	memset(requestMsg, 0, sizeof(requestMsg));
-	if (ReadFromSocket(clientSockfd, requestMsg, sizeof(requestMsg) - 1, n) != 0)
+	DataVector requestMsg(1024 * 2, 0);
+	if (ReadFromSocket(*clientSocket, requestMsg, n) != 0)
 	{
 		DebugPrint("ERROR reading from client socket");
-		CloseSocket(clientSockfd);
-		return NULL;
+		return nullptr;
 	}
 
-	if (strncmp(requestMsg, "\r\n\r\n", 4) == 0 )
+	if (strncmp(requestMsg.data(), "\r\n\r\n", 4) == 0 )
 	{
 		DebugPrint("Close msg received from client");
-		CloseSocket(clientSockfd);
-		return NULL;
+		return nullptr;
 	}
 
-	static long nErrReq = 0;
-	bool getRequest = strncmp(requestMsg, "GET", 3) == 0;
-	bool connectRequest = strncmp(requestMsg, "CONNECT", 7) == 0;
-	if ( !getRequest )
+	bool GETrequest = strncmp(requestMsg.data(), "GET", 3) == 0;
+	bool CONNECTrequest = strncmp(requestMsg.data(), "CONNECT", 7) == 0;
+	if ( !GETrequest )
 	{
-		if (nErrReq < 20)
+		static int nErrors {};
+		constexpr int maxWarings { 20 };
+
+		if (nErrors < maxWarings)
 		{
-			string req(requestMsg);
+			string req {requestMsg.begin(), requestMsg.end()};
 			replace(req.begin(), req.end(), '\r', '\0');
 			replace(req.begin(), req.end(), '\n', '\0');
 
 			DebugPrint("%s", req.c_str());
 			DebugPrint("This is not GET request, closing..");
-		}
-		nErrReq++;
 
-		if (nErrReq == 20)
-			DebugPrint("Further similar messages will be suppressed");
+			if (maxWarings == ++nErrors)
+				DebugPrint("Further similar messages will be suppressed");
+		}
 
 		// send 403 message to client
-		WriteSocket(clientSockfd, msg403, strlen(msg403));
-		CloseSocket(clientSockfd);
+		WriteSocket(*clientSocket, msg403, msg403.size());
 
-		return NULL;
+		return nullptr;
 	}
 
 	// extract host from header
@@ -409,7 +312,7 @@ void * ProcessClientRequest(void *arg)
 //	bool hasPort = false;
 //	memset(host, 0, 1024);
 //	char *pHost = strchr(requestMsg, ' ');
-//	if ( pHost != NULL)
+//	if ( pHost != nullptr)
 //	{
 //		pHost++; // skip blank
 //		char *pStart;
@@ -417,8 +320,8 @@ void * ProcessClientRequest(void *arg)
 //			pStart = strchr(pHost, '/');
 //		else
 //			pStart = pHost;
-//		char *pEnd = NULL;
-//		if ( pStart != NULL )
+//		char *pEnd = nullptr;
+//		if ( pStart != nullptr )
 //		{
 //			if (getRequest)
 //			{
@@ -430,17 +333,17 @@ void * ProcessClientRequest(void *arg)
 //				pEnd = strchr(pStart, ' ');
 //			}
 //		}
-//		if (pStart != NULL && pEnd != NULL )
+//		if (pStart != nullptr && pEnd != nullptr )
 //		{
 //			strncpy(host, pStart, pEnd - pStart);
 //		}
 //
 //		// check if port is present
 //		char *pColon = strchr(host, ':');
-//		if (pColon != NULL)
+//		if (pColon != nullptr)
 //		{
 //			*pColon = 0;
-//			serverPort = strtol(++pColon, NULL, 10);
+//			serverPort = strtol(++pColon, nullptr, 10);
 //			hasPort = true;
 //			DebugPrint("Setting destination server port to %d", serverPort);
 //		}
@@ -450,36 +353,41 @@ void * ProcessClientRequest(void *arg)
 //		DebugPrint("Host string not found, closing..");
 //		WriteSocket(clientSockfd, msg403, strlen(msg403));
 //		if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-//		return NULL;
+//		return nullptr;
 //	}
 
-	if (getRequest)
+	if (GETrequest)
 	{
-		DebugPrint("New GET request from client: %s", requestMsg);
+		DebugPrint("New GET request from client: %s", requestMsg.data());
 
-		GetRequest request(requestMsg);
+		toratio::HttpGETRequest request{ {requestMsg.begin(), requestMsg.end()} };
 
-		int serverPort = -1;
-		bool hasPort = false;
+		// extract PORT
+		int serverPort {80};
+		bool customPort {false};
 		string port = request.getPort();
-		if (port != "")
+		if (!port.empty())
 		{
-			serverPort = strtol(request.getPort().c_str(), NULL, 10);
-			hasPort = true;
+			try
+			{
+				serverPort = stoi(port);
+				customPort = true;
+			} catch (...)
+			{
+				DebugPrint("Invalid port was specified: %s", port.c_str());
+				return nullptr;
+			}
 		}
-		else
-			serverPort = 80;
-
-		string host = request.getHost();
-		DebugPrint("Request host: \"%s\", port: %d", host.c_str(), serverPort);
 
 		// resolve server ip
-		char serverIp[1024];
-		if (ResolveServerHostName(host.c_str(), serverIp, 1024) == NULL)
+		string host {request.getHost()};
+		DebugPrint("Request host: \"%s\", port: %d", host.c_str(), serverPort);
+
+		string serverIp { ResolveServerHostName(host) };
+		if (serverIp.empty())
 		{
-			WriteSocket(clientSockfd, msg403, strlen(msg403));
-			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-			return NULL;
+			WriteSocket(*clientSocket, msg403, msg403.size());
+			return nullptr;
 		}
 
 		// replace host name
@@ -489,13 +397,10 @@ void * ProcessClientRequest(void *arg)
 			size_t nNewline = request.getString().find("\r\n", nHost);
 			if (nNewline != string::npos)
 			{
-				stringstream ssPort;
-				ssPort << serverPort;
-
-				string newHostStr("Host: ");
+				string newHostStr{"Host: "};
 				newHostStr += string(host);
-				if (hasPort)
-					newHostStr += string(":") + ssPort.str();
+				if (customPort)
+					newHostStr += string{":"} + std::to_string(serverPort);
 
 				request.getString() = request.getString().replace(nHost, (nNewline - nHost), newHostStr);
 
@@ -504,87 +409,92 @@ void * ProcessClientRequest(void *arg)
 				if (nHttp != string::npos)
 				{
 					nHttp += 4;
-					string tmp = "http://" + string(host);
-					if (hasPort)
-						tmp += string(":") + ssPort.str();
-					request.getString() = request.getString().replace(nHttp, tmp.length(), string(""));
+					string tmp = "http://" + string{host};
+					if (customPort)
+						tmp += string(":") + std::to_string(serverPort);
+					request.getString() = request.getString().replace(nHttp, tmp.length(), string{""});
 				}
 			}
 		}
 
 		// modify uploaded parameter
-		bool error;
+		bool error {};
 		long long nUpBytes = request.getParameterValueLLong("uploaded", error);
-		if (!error)
+		if (error)
 		{
-			long long nDownBytes = request.getParameterValueLLong("downloaded", error);
-			long long newBytes = 0;
-			if (!error)
-			{
-				if (nUpBytes < nDownBytes)
-					newBytes = (long long)(nDownBytes * s_uploadMultiplier);
-				else
-					newBytes = (long long)(nUpBytes * s_uploadMultiplier);
-			}
-			else
-			{
-				DebugPrint("Error retrieving \"downloaded\" param from GET string (\"%s\") ", requestMsg);
-				newBytes = (long long)(nUpBytes * s_uploadMultiplier);
-			}
-
-			if ( newBytes >= 0 )
-			{
-				stringstream convert;
-				convert << newBytes;
-				DebugPrint("Setting \"uploaded\" to \"%s\"", convert.str().c_str());
-				request.setParameterValue("uploaded", convert.str());
-			}
-			else
-				DebugPrint("Error: uploaded bytes < 0 (original request: \"%s\")", requestMsg);
+			DebugPrint("Error retrieving 'uploaded' param from GET string ('%s') ", requestMsg);
 		}
 		else
 		{
-			DebugPrint("Error retrieving \"uploaded\" param from GET string (\"%s\") ", requestMsg);
+			long long nDownBytes = request.getParameterValueLLong("downloaded", error);
+			long long newUploadedBytes { 0 };
+			if (!error)
+			{
+				if (nUpBytes < nDownBytes)
+					newUploadedBytes = (long long)(nDownBytes * uploadMultiplier);
+				else
+					newUploadedBytes = (long long)(nUpBytes * uploadMultiplier);
+			}
+			else
+			{
+				DebugPrint("Warn: failed to retrieve 'downloaded' param from GET string ('%s') ", requestMsg);
+				newUploadedBytes = (long long)(nUpBytes * uploadMultiplier);
+			}
+
+			if ( newUploadedBytes >= 0 )
+			{
+				string byteStr { std::to_string( newUploadedBytes ) };
+				DebugPrint("Setting 'uploaded' to '%s'", byteStr.c_str());
+				request.setParameterValue("uploaded", byteStr );
+			}
+			else
+			{
+				DebugPrint("Error: uploaded bytes < 0 (original request: '%s')", requestMsg);
+			}
 		}
 
 		// query dest server
-		HSOCKET servSock = ConnectSocket(serverIp, serverPort);
-		if (servSock < 0)
+		toratio::SocketPtr serverSocket;
+		try
 		{
-			DebugPrint("ERROR invalid server socket descriptor (CONNECT failed, code: %d)", servSock);
-			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-			return NULL;
+			serverSocket.reset( new toratio::Socket{serverIp, serverPort});
+		} catch( std::exception& ex )
+		{
+			DebugPrint("ERROR could not create socket: %s", ex.what());
+			return nullptr;
+		} catch( ... )
+		{
+			DebugPrint("ERROR could not create socket (unknown error)");
+			return nullptr;
 		}
 
 		DebugPrint("Processing request: %s", request.c_str());
 
-		int bytesRead = 0;
-		int buffSize = 1024 * 1024 * 5;
-		char *buffResp = (char *)malloc(buffSize * sizeof(char));
-		if (buffResp == NULL)
+		DataVector serverResponse;
+		try
+		{
+			serverResponse.resize(1024 * 1024 * 5);
+		} catch (...)
 		{
 			DebugPrint("Not enough free memory, cant send request to destination server..");
-			return NULL;
+			return nullptr;
 		}
-
-		int proc = QueryDestinationServer(servSock, request.c_str(), buffResp, buffSize, bytesRead);
-		if ( proc != 0 )
+		int bytesRead = 0;
+		int result = QueryDestinationServer(*serverSocket, request.getString(), serverResponse, bytesRead);
+		if (result != 0)
 		{
-			DebugPrint("ERROR in ProcessDestServer (%d)", proc);
-			free(buffResp);
-			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-			return NULL;
+			DebugPrint("ERROR in ProcessDestServer (%d)", result);
+			return nullptr;
 		}
 
-		DebugPrint("Sending response to client (%d bytes)", bytesRead);
-		if ( WriteSocket(clientSockfd, buffResp, bytesRead) != 0)
+		DebugPrint("Sending server response to client (%d bytes)", bytesRead);
+		if (WriteSocket(*clientSocket, serverResponse, bytesRead) != 0)
+		{
 			DebugPrint("ERROR writing to client socket");
-
-		// cleanup
-		if ( servSock > 0 ) { CloseSocket(servSock); }
-		free(buffResp);
+			return nullptr;
+		}
 	}
-	else if (connectRequest)
+	else if (CONNECTrequest)
 	{
 		DebugPrint("HTTP CONNECT is not supported yet");
 
@@ -598,7 +508,7 @@ void * ProcessClientRequest(void *arg)
 //		{
 //			DebugPrint("ERROR invalid server socket descriptor (CONNECT failed, code: %d)", servSock);
 //			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
-//			return NULL;
+//			return nullptr;
 //		}
 //		DebugPrint("Connected to destination server (CONNECT)");
 //
@@ -608,7 +518,7 @@ void * ProcessClientRequest(void *arg)
 //			DebugPrint("ERROR writing to client socket");
 //			if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 //			if ( servSock > 0 ) { CloseSocket(servSock); }
-//			return NULL;
+//			return nullptr;
 //		}
 //		DebugPrint("Connected to destination server (CONNECT)");
 //
@@ -645,79 +555,139 @@ void * ProcessClientRequest(void *arg)
 	}
 
 	DebugPrint("Client request process finished succesfully, closing socket");
-	if ( clientSockfd > 0 ) { CloseSocket(clientSockfd); }
 
-	return NULL;
+	return nullptr;
+}
+
+#ifdef _WIN32
+struct WinSockInitializer
+{
+	WinSockInitializer()
+	{
+
+		WSADATA wsaData;
+		int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+		if (iResult != NO_ERROR) {
+			throw runtime_error{"WSAStartup() failed with error: " + std::to_string(iResult)};
+		}
+	}
+
+	~WinSockInitializer()
+	{
+		WSACleanup();
+	}
+};
+#endif
+
+bool ParseOptions( int argc, char *argv[] )
+{
+	int opt;
+
+	while ((opt = getopt(argc, argv, "d")) != -1)
+	{
+		switch (opt)
+		{
+		case 'd':
+			g_daemon = 1;
+			break;
+		default: // invalid argument
+			return false;
+		}
+	}
+
+	if (optind >= argc)
+	{
+		// no argument supplied, used default port
+		g_listenPort = {	"8080"};
+	}
+	else
+	{
+		g_listenPort = {	argv[optind]};
+	}
+
+	return true;
 }
 
 int main(int argc, char *argv[])
 {
+	if( !ParseOptions(argc, argv) )
+	{
+		printf( "Usage: %s [d] <LISTEN_PORT>\r\n", argc ? argv[0] : "toratio" );
+		printf( "Options: \r\n" );
+		printf( "\t -d \t daemon mode \r\n" );
+
+		return static_cast<int>(EXIT_CODES::INVALID_ARGUMENTS);
+	}
+
 #ifndef _WIN32
 	// set up signal hadler for ctrl+c
 	struct sigaction sigIntHandler;
-
 	sigIntHandler.sa_handler = SignalHandler;
 	sigemptyset(&sigIntHandler.sa_mask);
 	sigIntHandler.sa_flags = 0;
 
-	sigaction(SIGINT, &sigIntHandler, NULL);
+	sigaction(SIGINT, &sigIntHandler, nullptr);
+	sigaction(SIGTERM, &sigIntHandler, nullptr);
 #else
 	if (!SetConsoleCtrlHandler(SignalHandler, TRUE)) {
 		DebugPrint("ERROR: Could not set control handler");
 		return 4;
 	}
 
-	WSADATA wsaData;
-	int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-	if (iResult != NO_ERROR) {
-		DebugPrint("WSAStartup() failed with error: %d\n", iResult);
-		return 3;
+	unique_ptr<WinSockInitalizer> initalizerPtr;
+	try
+	{
+		initalizerPtr.reset(new WinSockInitalizer);
+	} catch (...)
+	{
+		DebugPrint("ERROR: unknown WinSockInitalizer error");
 	}
 #endif
 
+	if( g_daemon )
+	{
+		daemon( 0, 0 );
+	}
+
 	HSOCKET listenSockFd,clientSockFd;
 	socklen_t clilen;
-	int portno = -1;
-	struct sockaddr_in serv_addr, cli_addr;
-	if (argc < 2)
-	{
-		portno = 1234;
-	}
+	int listenPort {8080};
+	struct sockaddr_in serv_addr = {}, cli_addr;
 
 	listenSockFd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listenSockFd < 0)
 	{
 		DebugPrint("ERROR opening listen socket");
-#ifdef _WIN32
-		WSACleanup();
-#endif
-		return ERR_CANT_OPEN_LISTEN_SOCK;
+		return static_cast<int>(EXIT_CODES::FAIL_OPEN_LISTEN_SOCK);
 	}
-	memset((char *) &serv_addr, 0, sizeof(serv_addr));
-	if (argc > 1)
-		portno = atoi(argv[1]);
 
-	if (portno < 1 || portno > 65535)
+	try
 	{
-		DebugPrint("Could not convert parameter 1 (\"%s\") into port number", argv[1]);
-		return ERR_PARSING_PORT;
+		listenPort = stoi( g_listenPort );
+	} catch( ... )
+	{
+		DebugPrint("ERROR invalid listening port was specified: '%s'", g_listenPort);
+		return static_cast<int>(EXIT_CODES::FAIL_PARSING_PORT);
+	}
+
+	if (listenPort < 1 || listenPort > 65535)
+	{
+		DebugPrint("Invalid port number was specified: %s", g_listenPort);
+		return static_cast<int>(EXIT_CODES::FAIL_PARSING_PORT);
 	}
 
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-	serv_addr.sin_port = htons(portno);
+	serv_addr.sin_port = htons(listenPort);
 	if (bind(listenSockFd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 	{
 		DebugPrint("ERROR on binding listening socket, quitting..");
-#ifdef _WIN32
-		WSACleanup();
-#endif
-		return ERR_FAILED_TO_BIND;
+		return static_cast<int>(EXIT_CODES::FAIL_TO_BIND);
 	}
-	listen(listenSockFd, 5);
+	listen(listenSockFd, socketQueueSize);
 	clilen = sizeof(cli_addr);
 
-	fprintf(stdout, "%s running on port %d..\n", argv[0], portno);
+	DebugPrint("%s running on port %d..", argv[0], listenPort);
 
 	while (stop != true)
 	{
@@ -729,7 +699,8 @@ int main(int argc, char *argv[])
 		{
 #ifndef _WIN32
 			pthread_t t;
-			pthread_create(&t, NULL, &ProcessClientRequest, &clientSockFd);
+			pthread_create(&t, nullptr, &ProcessClientRequest, &clientSockFd);
+			pthread_detach( t );
 #else
 			ProcessClientRequest(&clientSockFd);
 #endif
@@ -741,10 +712,12 @@ int main(int argc, char *argv[])
 	}
 
 	DebugPrint("Closing listening socket..");
-	CloseSocket(listenSockFd);
 #ifdef _WIN32
-	WSACleanup();
+	closesocket(listenSockFd);
+#else
+	close(listenSockFd);
 #endif
+
 	DebugPrint("%s has shut down", argv[0]);
 	return 0;
 }
